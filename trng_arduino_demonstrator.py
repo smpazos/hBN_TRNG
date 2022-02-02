@@ -31,6 +31,7 @@ def monitorArduino(clkslow,outputs_dir,conn):
     sys.stdout = open(outputs_dir+'arduino_log.txt', 'w')
     # Initilize variables
     blink = False
+    shuntflag = False
     msg = 0
     tia_output = 0
     
@@ -38,17 +39,22 @@ def monitorArduino(clkslow,outputs_dir,conn):
     print('Intializing Arduino board...')
     board = pyfirmata.Arduino('COM7') # Replace port number as needed
     it = pyfirmata.util.Iterator(board)
+    # Set up analog input reporting to sample device signal
     board.analog[1].enable_reporting()
-    # tia_output = board.analog[0].read()
+    # Set PWM output for device bias
     bias = board.digital[11]
     bias.mode = pyfirmata.PWM
     pwm_counter = bias_value/VDD_ARDUINO
     bias.write(pwm_counter)
+    # Use a digital output to enable a shunt transistor, reducing PWM discharge time (FAST DEVICE RESET)
+    shuntbias = board.digital[3]
+    shuntbias.write = False
+    
     it.start()
     time.sleep(2)
     conn.send(5)
     print('Intialization succesful, running main loop')
-    t0 = time.time()
+    # t0 = time.time()
     
     # Polling loop with main thread pipe. 
     while True:
@@ -60,11 +66,15 @@ def monitorArduino(clkslow,outputs_dir,conn):
             # Command to switch off bias (RESET device)
             if msg == 9: 
                 bias.write(0)
+                shuntbias.write = True
+                shuntflag = True
                 print('Turning bias OFF')
                 msg = False
             # Command to switch on bias (SET device)
             if msg == 8:
                 bias.write(pwm_counter)
+                shuntbias.write = False
+                shuntflag = False
                 print('Turning bias ON')
                 msg = False
                 conn.send(12)
@@ -76,7 +86,7 @@ def monitorArduino(clkslow,outputs_dir,conn):
         board.digital[13].write(blink)
         
         # Read the analog input of the Arduino and send data to main thread
-        tia_output = board.analog[0].read()
+        tia_output = board.analog[1].read()
         conn.send(tia_output)
         
         # Wiat for arduino sampling "clkslow". Max is 20 Hz with PyFirmata's default polling.
@@ -254,7 +264,8 @@ def main():
         # Use the global variable simulationMode to set the mode:
         # simulationMode = False -> Experiment (needs a device conected)
         # simulationMode = True  -> Simulation (uses a previous acquisition of an experiment)
-        simulationMode = True
+        # simulationMode = True
+        simulationMode = False
         
         #Initialize variables and output directory to avoid data replacement
         now = datetime.now()
@@ -289,14 +300,17 @@ def main():
         # Threshold level for the analog input comparator        
         THRESHOLD_TIA = 2.5   # 2.5 for short meas
         THRESHOLD = THRESHOLD_TIA/V_DIVIDER/VDD_ARDUINO
-        
+        # Threshold limit that triggers device RESET (value between 0 and 1, relative to ouput TIA output dynamic range)
+        SET_LIMIT = 0.4
+        # Time (in seconds) to wait for device RESET/RELAXATION. Change dependending on architecture (shunt), PWM filter time constant and device characteristics
+        RESET_WAIT = 3
         # Live plot intialization
         #now = datetime.now()
         fig = plt.figure()
         ax = fig.add_subplot(111)
         # Next line returns a tuple of line objects, thus the comma
         line1, = ax.plot(count, tia_output, 'r-')
-        line2, = ax.plot([0,1400],[THRESHOLD_TIA,THRESHOLD_TIA],'b-')
+        line2, = ax.plot([0,200],[THRESHOLD_TIA,THRESHOLD_TIA],'b-')
         
         #Arduino Board initialization
         #board, it, bias, tia_output = setupArduino()
@@ -403,8 +417,9 @@ def main():
                 #     #     # print('Do not re-seed')
                 
                 # Condition for Reseting the device in case the amplifier saturates.
-                # Sends Reseting command to Arduino and logs the event.               
-                if (tia_output > 0.8 and reset is False):
+                # Sends Reseting command to Arduino and logs the event.  
+                
+                if (tia_output > SET_LIMIT and reset is False):
                     print('Conductance state changed, reseting device...')
                     parent_conn_ard.send(9)
                     reset = True
@@ -412,10 +427,10 @@ def main():
                           file = nlfsr_log)
                     twait = time.time()
                 
-                # Wait a fixed time (3 seconds) to turn bias back on and log event. 
+                # Wait a fixed time (3 seconds default) to turn bias back on and log event. 
                 # Depends on time constant of PWM.
                 # Can reduce times by including a discharge path.
-                if reset is True and time.time()-twait >= 3: 
+                if reset is True and time.time()-twait >= RESET_WAIT: 
                     # waitcount = waitcount + 1
                     # print(waitcount)
                     # if time.time()-twait > 3: #waitcount == 60:
