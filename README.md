@@ -17,13 +17,22 @@ NOTICE: Please install Python libraries (see following list) when missing. This 
 
 #importing libraries
 import matplotlib.pyplot as plt
+
 from multiprocessing import Process, Pipe
+
 import numpy as np
+
 import pyfirmata
+
 import time
+
 import sys, traceback
+
 from PIL import Image
+
 import scipy.io
+
 from datetime import datetime
+
 import os
 
